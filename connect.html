@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<meta charset="utf-8" />
+<title>NeuroSky Mindwave Mobile - Node - WebSocket</title>
+<style>
+.hidden{display:none;}
+.tab-title{width:180px;}
+svg {
+  font: 10px sans-serif;
+}
+
+.line {
+  fill: none;
+  stroke: #000;
+  stroke-width: 1.5px;
+}
+
+.axis path,
+.axis line {
+  fill: none;
+  stroke: #000;
+  shape-rendering: crispEdges;
+}
+</style>
+<link rel="stylesheet" href="css/normalize.css">
+<link rel="stylesheet" href="css/foundation.min.css">
+<body>
+<div id="connect-controls" class="hidden">
+    <button id="connect">Connect</button>
+    <button id="disconnect" class="hidden success">Disconnect</button>
+</div>
+    <div class="row">
+        <div id=send-container class="hidden">
+            <input id="send-input" type=text />
+            <button id="send-button">Send</button>
+        </div>
+    </div>
+    <section role="main" class="scroll-container">
+    <div class="">
+        <div class="">
+            <ul class="tabs vertical" data-tab>
+              <li data-type="attention" class="tab-title active"><a href="#panel1">Alertness</a></li>
+              <li data-type="meditation" class="tab-title"><a href="#panel1">Meditation</a></li>
+              <li data-type="blink" class="tab-title"><a href="#panel3">Blinks</a></li>
+            </ul>
+            <div class="tabs-content vertical">
+              <div class="content active" id="panel1">
+                <div id='graph-alertness'></div>
+              </div>
+              <div class="content" id="panel2">
+                <p>Panel 2 content goes here.</p>
+              </div>
+              <div class="content" id="panel3">
+                <input id="slider" type="range" min="0" max="1000" value="0" style="width:600px"/>
+              </div>
+            </div>
+            <div class="clearfix"></div>
+        </div>
+    </div>
+    </section>
+    
+<script type="text/javascript" src="js/jquery-2.1.1.min.js"></script>
+<script type="text/javascript" src="js/foundation.min.js"></script>
+<script type="text/javascript" src="js/d3.js"></script>
+<script language="javascript" type="text/javascript">
+    
+    // global vars to store current data points
+    var attention = 0;
+    var meditation = 0;
+    var blink = 0;
+    var poorSignalLevel = 0;
+    
+    // this is called by tick() below to retrieve whichever data is required at the moment
+    // when connected, this function is called every 1/2 second (or whatever is specified in tick() )
+    var getDataPoint = function(){
+        var dataType = $('.tab-title.active').attr('data-type');
+
+        // choose which data point to return for graph
+        switch(dataType){
+            case 'attention':
+                return attention;
+                break;
+            case 'meditation':
+                return meditation;
+                break;
+            // blink does its own thing with the slider, not used on the graph
+            // but if we wanted to graph blinks, we'd put it here    
+        }
+    }
+    
+    // Foundation framework (used for styling and tab buttons)
+    $(document).foundation();
+    
+    // main logic
+    $(document).ready(function(){
+        // output a simple message if WebSocket is supported by browser
+        if ("WebSocket" in window){
+            console.log("WebSocket is supported by your Browser. Proceed.");
+            $('#connect-controls').show();
+        }
+        
+        // when "Connect" is clicked, functions to change display and start graphing data from NeuroSky
+        $('#connect').on('click',function(e){
+            e.preventDefault(); // don't do what a button click normally does
+            
+            // Let us open a web socket (should be a Websocket server running locally already)
+            var ws = new WebSocket("ws://127.0.0.1:8080"); 
+            
+            // bind send button click (send button is currently hidden, to show it, take away "hidden" class)
+            $('#send-button').on('click',function(e){
+               ws.send($('#send-input').val()); // send a message back to websocket server
+            });
+
+            // when WebSocket connection is opened, do this stuff
+            ws.onopen = function(){
+                console.log('opened connection');
+                
+                // bind disconnect button
+                $('#disconnect').off().on('click', function(e){
+                    // hide disconnect button
+                    $(this).addClass('hidden');
+                    // show connect button
+                    $('#connect').removeClass('hidden');
+                    // hide send button
+                    $('#send-container').addClass('hidden');
+                    ws.close();
+                });
+                // hide connect button
+                $('#connect').addClass('hidden');
+                // show disconnect button
+                $('#disconnect').removeClass('hidden');
+                // show left nav tab buttons
+                $('#viz-controls').removeClass('hidden');
+                //$('#send-container').removeClass('hidden');
+                // Web Socket is connected, send data using send()
+                ws.send("Hello from websocket client!");
+                
+            };
+            
+            // whenever websocket server transmit a message, do this stuff
+            ws.onmessage = function (evt) { 
+                // parse the data (sent as string) into a standard JSON object (much easier to use)
+                var data = JSON.parse(evt.data);
+                
+                // handle "eSense" data
+                if(data.eSense){
+                    attention = data.eSense.attention;
+                    meditation = data.eSense.meditation;
+                }
+                
+                //console.log(currentData); // DEBUG
+                
+                // handle "blinkStrength" data
+                if(data.blinkStrength){
+                    blink = data.blinkStrength;
+                    console.log('[blink] ' + blink);
+                    // increment slider
+                    // newVal is just cumulative added values of blink so far
+                    // you can always drag the slider back to reset it
+                    var newVal = parseInt($('#slider').val()) + parseInt(data.blinkStrength);
+                    $('#slider').val(newVal);    
+                } else {
+                    blink = 0;   
+                }
+                
+                // handle "poorSignal" data
+                if(data.poorSignalLevel != null){
+                    poorSignalLevel = parseInt(data.poorSignalLevel);
+                }
+            };
+            
+            // when websocket closes connection, do this stuff
+            ws.onclose = function(){ 
+                // websocket is closed.
+                console.log("Connection is closed..."); 
+            };
+        });
+    });
+
+    // d3 graphing logic (live streaming)
+    
+    // start by generating 40 random data points to show on the graph
+    // (since we won't have any data right off the bat, we start with some dummy data)
+    // reference: 
+    var n = 40,
+    random = d3.random.normal(0, .2),
+    data = d3.range(n).map(random);
+ 
+    // set dimensions of the graph, width, height, margins
+    var margin = {top: 20, right: 20, bottom: 20, left: 40},
+        width = 900 - margin.left - margin.right,
+        height = 300 - margin.top - margin.bottom;
+
+    // setup x axis domain (0-39) and range
+    var x = d3.scale.linear()
+        .domain([0, n - 1])
+        .range([0, width]);
+
+    // setup y axis domain (0-100) and range
+    // note: we set the max y axis value to 100 because that seems to be the max value of "attention" and "meditation" data
+    // if we were graphing the raw "eegPower" data, we'd need to adjust y axis to fit max observed values
+    var y = d3.scale.linear()
+        .domain([0, 100])
+        .range([height, 0]);
+
+    // setup the line of the graph data
+    var line = d3.svg.line()
+        .x(function(d, i) { return x(i); })
+        .y(function(d, i) { return y(d); });
+
+    // create an svg in <div> with id="graph-alertness"
+    // set its width and height and margins
+    // this will be the container of the graph
+    var svg = d3.select("#graph-alertness").append("svg")
+        .attr("width", width + margin.left + margin.right)
+        .attr("height", height + margin.top + margin.bottom)
+      .append("g")
+        .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+    svg.append("defs").append("clipPath")
+        .attr("id", "clip")
+      .append("rect")
+        .attr("width", width)
+        .attr("height", height);
+
+    svg.append("g")
+        .attr("class", "x axis")
+        .attr("transform", "translate(0," + y(0) + ")")
+        .call(d3.svg.axis().scale(x).orient("bottom"));
+
+    svg.append("g")
+        .attr("class", "y axis")
+        .call(d3.svg.axis().scale(y).orient("left"));
+
+    var path = svg.append("g")
+        .attr("clip-path", "url(#clip)")
+      .append("path")
+        .datum(data)
+        .attr("class", "line")
+        .attr("d", line);
+
+    // tick calls itself over and over and updates a new data point
+    tick();
+ 
+    function tick() {
+
+      // push a new data point onto the back
+      data.push(getDataPoint());
+
+      // redraw the line, and slide it to the left
+      path
+          .attr("d", line)
+          .attr("transform", null)
+        .transition()
+          .duration(400) // how often to call call tick() in milliseconds
+          .ease("linear")
+          .attr("transform", "translate(" + x(-1) + ",0)")
+          .each("end", tick);
+
+      // pop the old data point off the front
+      data.shift();
+
+    }
+</script>
+</body>
