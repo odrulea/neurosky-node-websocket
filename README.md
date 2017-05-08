@@ -23,7 +23,7 @@ websocket -> https://github.com/einaros/ws
 
 # Getting Started
 
-1. turn on your Mindwave Mbile headset and connect to the ThinkGear Connector app on your machine
+1. turn on your Mindwave Mobile headset and connect to the ThinkGear Connector app on your machine
 2. from command line, go to root level of your local working directory
 3. start the node server
 ```
